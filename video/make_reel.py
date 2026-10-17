@@ -9,7 +9,6 @@ import argparse
 import math
 import os
 import subprocess
-import wave
 from multiprocessing import Pool
 
 import numpy as np
@@ -478,41 +477,6 @@ def frame_bytes(i):
     return render(i / FPS).tobytes()
 
 
-# --- 音 ---------------------------------------------------------------------
-def make_audio(path, sr=48000):
-    """炭火のはぜる音 + 低いゆらぎ。火のショットで大きく。"""
-    rng = np.random.default_rng(11)
-    n = int(DUR * sr)
-    t = np.arange(n) / sr
-    env = np.interp(t, [0, 4.6, 5.6, 18.8, 20.0, 24.5, 30], [0.35, 0.4, 1.0, 1.0, 0.45, 0.3, 0.0])
-    # 低いゴーッという炎のゆらぎ (ブラウンノイズ)
-    roar = np.cumsum(rng.normal(0, 1, n))
-    roar -= np.convolve(roar, np.ones(4801) / 4801, mode="same")
-    roar /= np.abs(roar).max() + 1e-9
-    roar *= 0.18 * (0.8 + 0.2 * np.sin(2 * np.pi * 0.37 * t))
-    # パチパチ: 短い減衰パルス
-    crackle = np.zeros(n)
-    times = np.sort(rng.uniform(0, DUR, 420))
-    for tc in times:
-        i0 = int(tc * sr)
-        L = int(sr * rng.uniform(0.002, 0.012))
-        if i0 + L >= n:
-            continue
-        burst = rng.normal(0, 1, L) * np.exp(-np.linspace(0, 6, L))
-        crackle[i0:i0 + L] += burst * rng.uniform(0.15, 0.9) * (rng.random() < 0.85 or 2.0)
-    crackle = np.diff(crackle, prepend=0) * 0.6  # 高域寄りに
-    mix = (roar + crackle * 0.5) * env
-    fade = np.clip(np.minimum(t / 0.4, (DUR - t) / 0.8), 0, 1)
-    mix *= fade
-    mix = mix / (np.abs(mix).max() + 1e-9) * 0.5
-    st = np.stack([mix, np.roll(mix, 240)], axis=1)
-    with wave.open(path, "wb") as w:
-        w.setnchannels(2)
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes((st * 32767).astype(np.int16).tobytes())
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--fonts", required=True)
@@ -528,11 +492,9 @@ def main():
             Image.fromarray(render(t)).save(os.path.join(args.still_dir, f"still_{t:05.2f}.jpg"), quality=88)
         return
 
-    wav = args.out + ".wav"
-    make_audio(wav)
     cmd = ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
-           "-r", str(FPS), "-i", "-", "-i", wav, "-c:v", "libx264", "-preset", "slow", "-crf", "20", "-maxrate", "12M", "-bufsize", "24M",
-           "-pix_fmt", "yuv420p", "-profile:v", "high", "-c:a", "aac", "-b:a", "192k",
+           "-r", str(FPS), "-i", "-", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-c:v", "libx264", "-preset", "slow", "-crf", "20", "-maxrate", "12M", "-bufsize", "24M",
+           "-pix_fmt", "yuv420p", "-profile:v", "high", "-c:a", "aac", "-b:a", "128k",
            "-movflags", "+faststart", "-shortest", args.out]
     ff = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     with Pool(args.jobs, initializer=init_worker, initargs=(args.fonts,)) as pool:
@@ -542,7 +504,6 @@ def main():
                 print(f"frame {i}/{NFRAMES}", flush=True)
     ff.stdin.close()
     ff.wait()
-    os.remove(wav)
     print("wrote", args.out)
 
 

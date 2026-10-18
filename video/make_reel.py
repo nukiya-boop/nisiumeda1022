@@ -484,6 +484,8 @@ def main():
     ap.add_argument("--still", type=float, nargs="*")
     ap.add_argument("--still-dir", default=".")
     ap.add_argument("--jobs", type=int, default=os.cpu_count())
+    ap.add_argument("--music", default=os.path.join(ROOT, "Morning_Mist_in_the_Garden.mp3"),
+                    help="BGM (冒頭30秒を使用)。空文字なら無音")
     args = ap.parse_args()
 
     if args.still:
@@ -492,9 +494,16 @@ def main():
             Image.fromarray(render(t)).save(os.path.join(args.still_dir, f"still_{t:05.2f}.jpg"), quality=88)
         return
 
+    if args.music:
+        audio_in = ["-i", args.music]
+        afilter = ["-af", f"atrim=0:{DUR},asetpts=PTS-STARTPTS,afade=t=in:st=0:d=0.3,"
+                          f"afade=t=out:st={DUR - 2.5}:d=2.5,loudnorm=I=-14:TP=-1.5:LRA=11,aresample=48000"]
+    else:
+        audio_in = ["-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo"]
+        afilter = []
     cmd = ["ffmpeg", "-y", "-v", "error", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}",
-           "-r", str(FPS), "-i", "-", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=stereo", "-c:v", "libx264", "-preset", "slow", "-crf", "20", "-maxrate", "12M", "-bufsize", "24M",
-           "-pix_fmt", "yuv420p", "-profile:v", "high", "-c:a", "aac", "-b:a", "128k",
+           "-r", str(FPS), "-i", "-", *audio_in, "-c:v", "libx264", "-preset", "slow", "-crf", "20", "-maxrate", "12M", "-bufsize", "24M",
+           "-pix_fmt", "yuv420p", "-profile:v", "high", *afilter, "-c:a", "aac", "-b:a", "192k", "-t", str(DUR),
            "-movflags", "+faststart", "-shortest", args.out]
     ff = subprocess.Popen(cmd, stdin=subprocess.PIPE)
     with Pool(args.jobs, initializer=init_worker, initargs=(args.fonts,)) as pool:
